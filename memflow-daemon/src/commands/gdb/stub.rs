@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::state::{state_lock_sync, CachedWin32Process, GdbStubHandle, KernelHandle};
+use crate::state::{state_lock_sync, Connection, GdbStubHandle};
 
 use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
@@ -9,11 +9,11 @@ use log::{error, info};
 use url::Url;
 
 use gdbstub::{
-    arch, BreakOp, Connection, DisconnectReason, GdbStub, ResumeAction, StopReason, Target, Tid,
-    TidSelector, SINGLE_THREAD_TID,
+    arch, BreakOp, DisconnectReason, GdbStub, ResumeAction, StopReason, Target, Tid, TidSelector,
+    SINGLE_THREAD_TID,
 };
 
-use memflow::*;
+use memflow::prelude::v1::*;
 
 fn wait_for_tcp(sockaddr: &str) -> Result<TcpStream> {
     info!("started tcp gdb stub on {:?}", sockaddr);
@@ -130,10 +130,10 @@ pub fn spawn_gdb_stub(
     conn_id: &str,
     pid: PID,
     addr: &str,
-    kernel: KernelHandle,
+    connection: Connection,
 ) -> Result<()> {
     // TODO: generic stubs per architecture
-    let stub = GdbStubx64::new(kernel, pid).unwrap();
+    let stub = GdbStubx64::new(connection, pid).unwrap();
 
     // add to global state
     gdb_stub_init(id, conn_id, addr)?;
@@ -149,15 +149,16 @@ pub fn spawn_gdb_stub(
 
 /// Implementation of the Virtual Memory GDB Stub
 pub struct GdbStubx64 {
-    process: CachedWin32Process,
+    process: ArcPluginProcess,
     //eip: Address,
 }
 
 impl GdbStubx64 {
-    pub fn new(kernel: KernelHandle, pid: PID) -> Result<Self> {
-        match kernel {
-            KernelHandle::Win32(kernel) => {
-                let process = kernel.into_process_pid(pid).map_err(Error::from)?;
+    pub fn new(connection: Connection, pid: PID) -> Result<Self> {
+        match connection {
+            Connection::Connector(_) => Err(Error::Other("no os opened on this connection")),
+            Connection::Os(os) => {
+                let process = os.into_process_pid(pid).map_err(Error::from)?;
 
                 // get first module
 

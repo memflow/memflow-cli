@@ -30,8 +30,6 @@ pub enum Error {
     Connector(String),
     /// memflow core error
     Core(memflow::error::Error),
-    /// memflow win32 error
-    Win32(memflow_win32::error::Error),
     /// memflow partial error
     PartialError(memflow::error::PartialError<()>),
     /// PE error.
@@ -55,13 +53,6 @@ impl convert::From<&'static str> for Error {
 impl convert::From<memflow::error::Error> for Error {
     fn from(error: memflow::error::Error) -> Self {
         Error::Core(error)
-    }
-}
-
-/// Convert from memflow_win32::error::Error to error
-impl convert::From<memflow_win32::error::Error> for Error {
-    fn from(error: memflow_win32::error::Error) -> Self {
-        Error::Win32(error)
     }
 }
 
@@ -94,7 +85,7 @@ impl From<tonic::Status> for Error {
 
 impl Error {
     /// Returns a tuple representing the error description and its string value.
-    pub fn to_str_pair(&self) -> (&str, Option<&str>) {
+    pub fn as_str_pair(&self) -> (&str, Option<&str>) {
         match self {
             Error::Other(e) => ("other error", Some(e)),
             Error::IO => ("i/o error", None),
@@ -104,24 +95,23 @@ impl Error {
             Error::SocketWrite => ("socket write error", None),
             Error::GDB => ("gdb stub error", None),
             Error::Connector(e) => ("connector error", Some(e)),
-            Error::Core(e) => ("memflow core error", Some(e.to_str())),
-            Error::Win32(e) => ("memflow win32 error", Some(e.to_str())),
-            Error::PartialError(e) => ("memflow partial error", Some(e.to_str())),
-            Error::PE(e) => ("error handling pe", Some(e.to_str())),
+            Error::Core(e) => ("memflow core error", Some(e.as_str())),
+            Error::PartialError(e) => ("memflow partial error", Some(e.as_str())),
+            Error::PE(e) => ("pelite error", Some(e.to_str())),
             Error::TonicTransport(e) => ("Tonic transport error", Some(e)),
             Error::TonicStatus(e) => ("Tonic status error", Some(e)),
         }
     }
 
     /// Returns a simple string representation of the error.
-    pub fn to_str(&self) -> &str {
-        self.to_str_pair().0
+    pub fn as_str(&self) -> &str {
+        self.as_str_pair().0
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let (desc, value) = self.to_str_pair();
+        let (desc, value) = self.as_str_pair();
 
         if let Some(value) = value {
             write!(f, "{}: {}", desc, value)
@@ -133,7 +123,7 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {
     fn description(&self) -> &str {
-        self.to_str()
+        self.as_str()
     }
 }
 

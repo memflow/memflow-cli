@@ -12,8 +12,7 @@ keywords = [ "memflow", "introspection", "memory" ]
 categories = [ "api-bindings", "memory-management", "os" ]
 
 [dependencies]
-memflow = { version = "0.1", features = ["inventory", "serde_derive"] }
-memflow-win32 = { version = "0.1", features = ["serde_derive"] }
+memflow = { git = "https://github.com/memflow/memflow", branch = "next", features = ["plugins", "serde_derive"] }
 clap = { version = "2.33.0" }
 log = "0.4.8"
 simplelog = "0.8.0"
@@ -27,9 +26,8 @@ serde_derive = "1.0"
 serde_json = "1.0"
 time = "0.1"
 
+pelite = { version = "0.9", features = ["serde"] } # TODO: removeme
 libc = "0.2.51"
-pelite = { version = "0.9", features = ["serde"] }
-sudo = { git = "https://gitlab.com/Heep/sudo.rs.git" }
 
 # gdb
 gdbstub = "=0.2.1"

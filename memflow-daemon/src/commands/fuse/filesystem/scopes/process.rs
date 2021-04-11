@@ -1,6 +1,6 @@
 use super::super::{FileSystemEntry, FileSystemFileHandler, StaticFileReader};
 use crate::error::{Error, Result};
-use crate::state::KernelHandle;
+use crate::state::Connection;
 
 use minidump_writer::{
     minidump::Minidump,
@@ -9,9 +9,7 @@ use minidump_writer::{
     },
 };
 
-use memflow::mem::VirtualMemory;
-use memflow::types::size;
-use memflow_win32::*;
+use memflow::prelude::v1::*;
 
 use std::cell::RefCell;
 
@@ -24,7 +22,7 @@ pub struct ProcessInfoFile {
 }
 
 impl ProcessInfoFile {
-    pub fn new(pi: &Win32ProcessInfo) -> Self {
+    pub fn new(pi: &ProcessInfo) -> Self {
         let pistr = serde_json::to_string_pretty(pi).unwrap_or_default();
         Self { pistr }
     }
@@ -53,15 +51,16 @@ impl FileSystemEntry for ProcessInfoFile {
 }
 
 pub struct ProcessMiniDump {
-    kernel: Arc<Mutex<KernelHandle>>,
-    process_info: Win32ProcessInfo,
+    connection: Arc<Mutex<Connection>>,
+    process_info: ProcessInfo,
     cached_out: Mutex<RefCell<Option<Vec<u8>>>>,
 }
+unsafe impl Sync for ProcessMiniDump {} // TODO: does this hold?
 
 impl ProcessMiniDump {
-    pub fn new(kernel: Arc<Mutex<KernelHandle>>, process_info: Win32ProcessInfo) -> Self {
+    pub fn new(connection: Arc<Mutex<Connection>>, process_info: ProcessInfo) -> Self {
         Self {
-            kernel,
+            connection,
             process_info,
             cached_out: Mutex::new(RefCell::new(None)),
         }
@@ -93,6 +92,7 @@ impl FileSystemEntry for ProcessMiniDump {
         false
     }
 
+    // TODO: only enable minidumps on Win32
     fn open(&self) -> Result<Box<dyn FileSystemFileHandler>> {
         let lock = self.cached_out.lock().unwrap();
         let mut locked_cache = lock.borrow_mut();
@@ -100,13 +100,16 @@ impl FileSystemEntry for ProcessMiniDump {
         if let Some(out) = locked_cache.as_ref() {
             Ok(Box::new(StaticFileReader::from_vec(out.clone())))
         } else {
-            let mut kernel = self
-                .kernel
+            let mut connection = self
+                .connection
                 .lock()
                 .map_err(|_| Error::Other("Poisoned lock".to_string()))?;
 
-            match &mut *kernel {
-                KernelHandle::Win32(kernel) => {
+            match &mut *connection {
+                Connection::Connector(_) => {
+                    Err(Error::Other("Os not opened on connection".to_string()))
+                },
+                Connection::Os(os) => {
                     let (major, minor, build) = kernel.kernel_info.kernel_winver.as_tuple();
 
                     let mut process =
@@ -165,15 +168,16 @@ impl FileSystemEntry for ProcessMiniDump {
 }
 
 pub struct ProcessMemoryMaps {
-    kernel: Arc<Mutex<KernelHandle>>,
-    process_info: Win32ProcessInfo,
+    connection: Arc<Mutex<Connection>>,
+    process_info: ProcessInfo,
     cached_out: Mutex<RefCell<Option<String>>>,
 }
+unsafe impl Sync for ProcessMemoryMaps {} // TODO: does this hold?
 
 impl ProcessMemoryMaps {
-    pub fn new(kernel: Arc<Mutex<KernelHandle>>, process_info: Win32ProcessInfo) -> Self {
+    pub fn new(connection: Arc<Mutex<Connection>>, process_info: ProcessInfo) -> Self {
         Self {
-            kernel,
+            connection,
             process_info,
             cached_out: Mutex::new(RefCell::new(None)),
         }
@@ -214,16 +218,18 @@ impl FileSystemEntry for ProcessMemoryMaps {
         if let Some(out) = locked_cache.as_ref() {
             Ok(Box::new(StaticFileReader::from_string(out.clone())))
         } else {
-            let mut kernel = self
-                .kernel
+            let mut connection = self
+                .connection
                 .lock()
                 .map_err(|_| Error::Other("Poisoned lock".to_string()))?;
 
-            match &mut *kernel {
-                KernelHandle::Win32(kernel) => {
-                    let mut process =
-                        Win32Process::with_kernel_ref(kernel, self.process_info.clone());
-                    let maps = process.virt_mem.virt_translation_map();
+            match &mut *connection {
+                Connection::Connector(_) => {
+                    Err(Error::Other("Os not opened on connection".to_string()))
+                },
+                Connection::Os(os) => {
+                    let mut process = os.process_by_info(self.process_info.clone())?;
+                    let maps = process.virt_mem().virt_translation_map();
                     let module_list = process.module_list()?;
 
                     let ret: String = maps
@@ -251,7 +257,7 @@ impl FileSystemEntry for ProcessMemoryMaps {
                                 vaddr + size,
                                 perms,
                                 paddr,
-                                module.map(|m| m.name.clone()).unwrap_or_default()
+                                module.map(|m| m.name.clone().to_string()).unwrap_or_default()
                             )
                         })
                         .collect();

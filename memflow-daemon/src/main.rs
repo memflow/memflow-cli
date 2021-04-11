@@ -198,19 +198,7 @@ fn main() {
                 .required(false)
                 .default_value(CONFIG_FILE),
         )
-        .arg(
-            Arg::with_name("elevate")
-                .short("E")
-                .long("elevate")
-                .help("elevate privileges upon start")
-                .takes_value(false)
-                .required(false),
-        )
         .get_matches();
-
-    if matches.occurrences_of("elevate") > 0 {
-        sudo::escalate_if_needed().expect("failed to elevate privileges");
-    }
 
     // load config
     let config_path = matches.value_of("config").unwrap();

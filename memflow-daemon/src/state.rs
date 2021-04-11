@@ -6,8 +6,7 @@ use tokio::sync::{Mutex, MutexGuard};
 use lazy_static::lazy_static;
 use uuid::Uuid;
 
-use memflow::*;
-use memflow_win32::*;
+use memflow::prelude::v1::*;
 
 lazy_static! {
     pub static ref STATE: Mutex<State> = Mutex::new(State::new());
@@ -50,9 +49,8 @@ impl State {
     pub fn connection_add(
         &mut self,
         name: &str,
-        args: Option<String>,
         alias: Option<String>,
-        kernel: KernelHandle,
+        connection: Connection,
     ) -> Result<String> {
         if alias.is_some()
             && self
@@ -65,7 +63,7 @@ impl State {
         }
 
         let id = new_uuid();
-        let conn = OpenedConnection::new(&id, alias.clone(), name, args, kernel);
+        let conn = OpenedConnection::new(&id, name, alias.clone(), connection);
 
         self.connections.insert(id.clone(), conn);
         if let Some(a) = alias {
@@ -119,46 +117,28 @@ impl State {
     }
 }
 
-pub type CachedConnectorInstance =
-    CachedMemoryAccess<'static, ConnectorInstance, TimedCacheValidator>;
-
-pub type CachedTranslate = CachedVirtualTranslate<DirectTranslate, TimedCacheValidator>;
-
-pub type CachedWin32Kernel = memflow_win32::Kernel<CachedConnectorInstance, CachedTranslate>;
-
-pub type CachedWin32Process = memflow_win32::Win32Process<
-    VirtualDMA<CachedConnectorInstance, CachedTranslate, Win32VirtualTranslate>,
->;
-
-#[derive(Debug, Clone)]
-pub enum KernelHandle {
-    Win32(CachedWin32Kernel),
+#[derive(Clone)]
+pub enum Connection {
+    Connector(ConnectorInstance),
+    Os(OsInstance),
 }
 
 pub struct OpenedConnection {
     pub id: String,
+    pub name: String,
     pub alias: Option<String>,
     pub refcount: usize,
-    pub name: String,
-    pub args: Option<String>,
-    pub kernel: KernelHandle,
+    pub connection: Connection,
 }
 
 impl OpenedConnection {
-    pub fn new(
-        id: &str,
-        alias: Option<String>,
-        name: &str,
-        args: Option<String>,
-        kernel: KernelHandle,
-    ) -> Self {
+    pub fn new(id: &str, name: &str, alias: Option<String>, connection: Connection) -> Self {
         Self {
             id: id.to_string(),
+            name: name.to_string(),
             alias,
             refcount: 0,
-            name: name.to_string(),
-            args,
-            kernel,
+            connection,
         }
     }
 }

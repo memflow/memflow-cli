@@ -6,7 +6,7 @@ use log::{info, Level};
 extern crate clap;
 use clap::{App, Arg};
 
-use memflow::*;
+use memflow::prelude::v1::*;
 
 fn main() {
     let matches = App::new(crate_name!())

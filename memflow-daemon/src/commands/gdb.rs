@@ -13,7 +13,7 @@ pub async fn attach(msg: &GdbAttachRequest) -> Result<GdbAttachResponse> {
 
     // find connection and spawn gdb thread
     if let Some(conn) = state.connection_mut(&msg.conn_id) {
-        let kernel = conn.kernel.clone();
+        let connection = conn.connection.clone();
         let id = new_uuid();
 
         info!("gdb stub with id {} spawned at address {}", id, &msg.addr);
@@ -27,7 +27,7 @@ pub async fn attach(msg: &GdbAttachRequest) -> Result<GdbAttachResponse> {
                 &msg_clone.conn_id,
                 msg_clone.pid,
                 &msg_clone.addr,
-                kernel,
+                connection,
             )
             .unwrap();
         });

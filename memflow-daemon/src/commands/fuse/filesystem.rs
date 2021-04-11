@@ -2,7 +2,7 @@ mod scopes;
 use scopes::ConnectionScope;
 
 use crate::error::{Error, Result};
-use crate::state::{state_lock_sync, FileSystemHandle, KernelHandle};
+use crate::state::{state_lock_sync, Connection, FileSystemHandle};
 
 use std::cell::RefCell;
 use std::ffi::{OsStr, OsString};
@@ -241,12 +241,15 @@ impl VirtualMemoryFileSystem {
         id: &str,
         conn_id: &str,
         mount_point: &str,
-        kernel: KernelHandle,
+        connection: Connection,
         uid: u32,
         gid: u32,
     ) -> Self {
-        let readonly = match &kernel {
-            KernelHandle::Win32(kernel) => kernel.phys_mem.metadata().readonly,
+        let readonly = match &connection {
+            Connection::Connector(connector) => connector.metadata().readonly,
+            Connection::Os(os) => {
+                panic!("os.into_phys_mem() not implemented yet");
+            }
         };
 
         Self {
@@ -258,7 +261,7 @@ impl VirtualMemoryFileSystem {
             gid,
             readonly,
 
-            root: Arc::new(Box::new(ConnectionScope::new(kernel))),
+            root: Arc::new(Box::new(ConnectionScope::new(connection))),
 
             opened_files: RwLock::new(FileHandles::default()),
         }

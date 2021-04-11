@@ -1,65 +1,71 @@
 use crate::error::{Error, Result};
-use crate::state::{KernelHandle, STATE};
+use crate::state::{Connection, STATE};
+
+use std::convert::TryFrom;
 
 use log::{error, info};
-use memflow::{ConnectorArgs, ConnectorInstance, ConnectorInventory};
+use memflow::prelude::v1::*;
 
 use crate::memflow_rpc::{
     CloseConnectionRequest, CloseConnectionResponse, ConnectionDescription, ListConnectionsRequest,
     ListConnectionsResponse, NewConnectionRequest, NewConnectionResponse,
 };
 
-fn create_connector(msg: &NewConnectionRequest) -> Result<ConnectorInstance> {
-    let args = match &msg.args {
-        args if args == "" => ConnectorArgs::default(),
-        args => ConnectorArgs::parse(&args)
-            .map_err(|_| Error::Connector("unable to parse connector string".into()))?,
-    };
+fn create_connection(msg: &NewConnectionRequest) -> Result<Connection> {
+    // do a full inventory (re-)scan here
+    let inventory = Inventory::scan();
 
-    let inventory = unsafe { ConnectorInventory::scan() };
-    unsafe { inventory.create_connector(&msg.name, &args) }.map_err(Error::from)
+    // try to initialize the os based on the parameters
+    let builder = inventory.builder().connector(&msg.connector);
+
+    if !msg.connector_args.is_empty() {
+        builder = builder.args(Args::parse(&msg.connector_args)?);
+    }
+
+    if msg.os.is_empty() {
+        // initialize a connector
+        let connector = builder.build()?;
+        Ok(Connection::Connector(connector))
+    } else {
+        // initialize a os
+        let os_builder = builder.os(&msg.os);
+        if !msg.os_args.is_empty() {
+            os_builder = os_builder.args(Args::parse(&msg.os_args)?);
+        }
+        let os = os_builder.build()?;
+        Ok(Connection::Os(os))
+    }
 }
 
 pub async fn new<'a>(msg: &NewConnectionRequest) -> Result<NewConnectionResponse> {
-    match create_connector(msg) {
-        Ok(conn) => {
-            // TODO: add os argument
+    match create_connection(msg) {
+        Ok(connection) => {
             // TODO: redirect log to client
             // TODO: add cache options
 
-            info!("connector created");
-
-            // initialize kernel
-            let kernel = memflow_win32::Kernel::builder(conn)
-                .build_default_caches()
-                .build()?;
-
-            info!("found win32 kernel");
-
             let mut state = STATE.lock().await;
 
+            let name = format!("{}_{}", msg.connector, msg.os);
             match state.connection_add(
-                &msg.name,
-                if msg.args == "" {
-                    None
-                } else {
-                    Some(msg.args.clone())
-                },
+                &name,
                 if msg.alias == "" {
                     None
                 } else {
                     Some(msg.alias.clone())
                 },
-                KernelHandle::Win32(kernel),
+                connection,
             ) {
                 Ok(id) => {
-                    info!("connection created: {} | {} | {:?}", id, msg.name, msg.args);
+                    info!(
+                        "connection created: {} | {} | {:?} | {} | {:?}",
+                        id, msg.connector, msg.connector_args, msg.os, msg.os_args
+                    );
                     Ok(NewConnectionResponse { conn_id: id })
                 }
                 Err(err) => {
                     let err_msg = format!(
-                        "could not create connector: {} | {:?} ({})",
-                        msg.name, msg.args, err
+                        "could not create connector: {} | {:?} | {} | {:?} ({})",
+                        msg.connector, msg.connector_args, msg.os, msg.os_args, err
                     );
                     error!("{}", err_msg);
                     Err(Error::Connector(err_msg))
@@ -68,8 +74,8 @@ pub async fn new<'a>(msg: &NewConnectionRequest) -> Result<NewConnectionResponse
         }
         Err(err) => {
             let err_msg = format!(
-                "could not create connector: {} | {:?} ({})",
-                msg.name, msg.args, err
+                "could not create connector: {} | {:?} | {} | {:?} ({})",
+                msg.connector, msg.connector_args, msg.os, msg.os_args, err
             );
             error!("{}", err_msg);
             Err(Error::Connector(err_msg))
@@ -89,10 +95,9 @@ pub async fn ls(_msg: &ListConnectionsRequest) -> Result<ListConnectionsResponse
 
     if !state.connections.is_empty() {
         for c in state.connections.iter() {
-            let con = ConnectionDescription {
+            connections.push(ConnectionDescription {
                 conn_id: c.1.id.clone(),
                 name: c.1.name.clone(),
-                args: c.1.args.as_ref().map(|a| a.to_string()).unwrap_or_default(),
                 alias: c
                     .1
                     .alias
@@ -100,8 +105,7 @@ pub async fn ls(_msg: &ListConnectionsRequest) -> Result<ListConnectionsResponse
                     .map(|a| a.to_string())
                     .unwrap_or_default(),
                 refcount: c.1.refcount as u64,
-            };
-            connections.push(con);
+            });
         }
     }
 

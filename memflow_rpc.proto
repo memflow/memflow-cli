@@ -46,9 +46,11 @@ service Memflow {
 // **************************************
 // NewConnection
 message NewConnectionRequest {
-    string name = 1;
-    string args = 2;
-    string alias = 3;
+    string connector = 1;
+    string connector_args = 2;
+    string os = 3;
+    string os_args = 4;
+    string alias = 5;
 }
 
 message NewConnectionResponse {
@@ -67,9 +69,8 @@ message ListConnectionsResponse {
 message ConnectionDescription {
     string conn_id = 1;
     string name = 2;
-    string args = 3;
-    string alias = 4;
-    uint64 refcount = 5;
+    string alias = 3;
+    uint64 refcount = 4;
 }
 
 // **************************************

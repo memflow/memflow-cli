@@ -8,22 +8,22 @@ mod module;
 use module::{ModuleDumpFile, ModulePeFolder};
 
 use super::{ChildrenList, FileSystemChildren, FileSystemEntry};
-use crate::state::KernelHandle;
+use crate::state::Connection;
 
 use std::sync::{Arc, Mutex};
 
-use memflow_win32::{Win32ModuleInfo, Win32Process, Win32ProcessInfo};
+use memflow::prelude::v1::*;
 
 pub struct ConnectionScope {
-    kernel: Arc<Mutex<KernelHandle>>,
+    connection: Arc<Mutex<Connection>>,
     name: String,
     children: FileSystemChildren,
 }
 
 impl ConnectionScope {
-    pub fn new(kernel: KernelHandle) -> Self {
+    pub fn new(connection: Connection) -> Self {
         Self {
-            kernel: Arc::new(Mutex::new(kernel)),
+            connection: Arc::new(Mutex::new(connection)),
             name: std::path::MAIN_SEPARATOR.to_string(),
             children: FileSystemChildren::default(),
         }
@@ -42,9 +42,9 @@ impl FileSystemEntry for ConnectionScope {
     fn children(&self) -> Option<ChildrenList> {
         Some(self.children.get_or_insert(|| {
             vec![
-                Box::new(DriverRootFolder::new(self.kernel.clone())),
-                Box::new(ProcessRootFolder::new(self.kernel.clone())),
-                Box::new(PhysicalDumpFile::new(self.kernel.clone())),
+                Box::new(DriverRootFolder::new(self.connection.clone())),
+                Box::new(ProcessRootFolder::new(self.connection.clone())),
+                Box::new(PhysicalDumpFile::new(self.connection.clone())),
             ]
         }))
     }
@@ -52,14 +52,14 @@ impl FileSystemEntry for ConnectionScope {
 
 /// Describes the root level 'drivers' folder
 pub struct DriverRootFolder {
-    kernel: Arc<Mutex<KernelHandle>>,
+    connection: Arc<Mutex<Connection>>,
     children: FileSystemChildren,
 }
 
 impl DriverRootFolder {
-    pub fn new(kernel: Arc<Mutex<KernelHandle>>) -> Self {
+    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
         Self {
-            kernel,
+            connection,
             children: FileSystemChildren::default(),
         }
     }
@@ -78,19 +78,18 @@ impl FileSystemEntry for DriverRootFolder {
         Some(self.children.get_or_insert(|| {
             let mut result = Vec::new();
 
-            if let Ok(mut kernel) = self.kernel.lock() {
-                match &mut *kernel {
-                    KernelHandle::Win32(kernel) => {
-                        if let Ok(mut kernel_proc) = kernel.kernel_process() {
-                            if let Ok(modules) = kernel_proc.module_list() {
-                                for mi in modules.into_iter() {
-                                    result.push(Box::new(ModuleFolder::new(
-                                        self.kernel.clone(),
-                                        kernel_proc.proc_info.clone(),
-                                        mi,
-                                    ))
-                                        as Box<dyn FileSystemEntry>);
-                                }
+            if let Ok(mut connection) = self.connection.lock() {
+                match &mut *connection {
+                    Connection::Connector(_) => (),
+                    Connection::Os(os) => {
+                        if let Ok(modules) = os.module_list() {
+                            for mi in modules.into_iter() {
+                                result.push(Box::new(ModuleFolder::new(
+                                    self.connection.clone(),
+                                    kernel_proc.proc_info.clone(),
+                                    mi,
+                                ))
+                                    as Box<dyn FileSystemEntry>);
                             }
                         }
                     }
@@ -104,14 +103,14 @@ impl FileSystemEntry for DriverRootFolder {
 
 /// Describes the root level 'processes' folder
 pub struct ProcessRootFolder {
-    kernel: Arc<Mutex<KernelHandle>>,
+    connection: Arc<Mutex<Connection>>,
     children: FileSystemChildren,
 }
 
 impl ProcessRootFolder {
-    pub fn new(kernel: Arc<Mutex<KernelHandle>>) -> Self {
+    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
         Self {
-            kernel,
+            connection,
             children: FileSystemChildren::default(),
         }
     }
@@ -130,12 +129,16 @@ impl FileSystemEntry for ProcessRootFolder {
         Some(self.children.get_or_insert(|| {
             let mut result = Vec::new();
 
-            if let Ok(mut kernel) = self.kernel.lock() {
-                match &mut *kernel {
-                    KernelHandle::Win32(kernel) => {
-                        if let Ok(processes) = kernel.process_info_list() {
+            if let Ok(mut connection) = self.connection.lock() {
+                match &mut *connection {
+                    Connection::Connector(_) => (),
+                    Connection::Os(os) => {
+                        if let Ok(processes) = os.process_info_list() {
                             for pi in processes.into_iter() {
-                                result.push(Box::new(ProcessFolder::new(self.kernel.clone(), pi))
+                                result.push(Box::new(ProcessFolder::new(
+                                    self.connection.clone(),
+                                    pi,
+                                ))
                                     as Box<dyn FileSystemEntry>);
                             }
                         }
@@ -150,18 +153,19 @@ impl FileSystemEntry for ProcessRootFolder {
 
 // TODO: unify process_info for different osses
 pub struct ProcessFolder {
-    kernel: Arc<Mutex<KernelHandle>>,
-    pi: Win32ProcessInfo,
+    connection: Arc<Mutex<Connection>>,
+    pi: ProcessInfo,
 
     name: String,
     children: FileSystemChildren,
 }
+unsafe impl Sync for ProcessFolder {} // TODO: does this hold?
 
 impl ProcessFolder {
-    fn new(kernel: Arc<Mutex<KernelHandle>>, pi: Win32ProcessInfo) -> Self {
+    fn new(connection: Arc<Mutex<Connection>>, pi: ProcessInfo) -> Self {
         let name = format!("{}_{}", pi.pid, pi.name);
         Self {
-            kernel,
+            connection,
             pi,
 
             name,
@@ -183,25 +187,35 @@ impl FileSystemEntry for ProcessFolder {
         Some(self.children.get_or_insert(|| {
             vec![
                 Box::new(ProcessInfoFile::new(&self.pi)),
-                Box::new(ProcessMemoryMaps::new(self.kernel.clone(), self.pi.clone())),
-                Box::new(ProcessMiniDump::new(self.kernel.clone(), self.pi.clone())),
-                Box::new(ModuleRootFolder::new(self.kernel.clone(), self.pi.clone())),
+                Box::new(ProcessMemoryMaps::new(
+                    self.connection.clone(),
+                    self.pi.clone(),
+                )),
+                Box::new(ProcessMiniDump::new(
+                    self.connection.clone(),
+                    self.pi.clone(),
+                )),
+                Box::new(ModuleRootFolder::new(
+                    self.connection.clone(),
+                    self.pi.clone(),
+                )),
             ]
         }))
     }
 }
 
 pub struct ModuleRootFolder {
-    kernel: Arc<Mutex<KernelHandle>>,
-    pi: Win32ProcessInfo,
+    connection: Arc<Mutex<Connection>>,
+    pi: ProcessInfo,
 
     children: FileSystemChildren,
 }
+unsafe impl Sync for ModuleRootFolder {} // TODO: does this hold?
 
 impl ModuleRootFolder {
-    fn new(kernel: Arc<Mutex<KernelHandle>>, pi: Win32ProcessInfo) -> Self {
+    fn new(connection: Arc<Mutex<Connection>>, pi: ProcessInfo) -> Self {
         Self {
-            kernel,
+            connection,
             pi,
 
             children: FileSystemChildren::default(),
@@ -223,18 +237,20 @@ impl FileSystemEntry for ModuleRootFolder {
         Some(self.children.get_or_insert(|| {
             let mut result = Vec::new();
 
-            if let Ok(mut kernel) = self.kernel.lock() {
-                match &mut *kernel {
-                    KernelHandle::Win32(kernel) => {
-                        let mut process = Win32Process::with_kernel_ref(kernel, self.pi.clone());
-                        if let Ok(modules) = process.module_list() {
-                            for mi in modules.into_iter() {
-                                result.push(Box::new(ModuleFolder::new(
-                                    self.kernel.clone(),
-                                    self.pi.clone(),
-                                    mi,
-                                ))
-                                    as Box<dyn FileSystemEntry>);
+            if let Ok(mut connection) = self.connection.lock() {
+                match &mut *connection {
+                    Connection::Connector(_) => (),
+                    Connection::Os(os) => {
+                        if let Ok(mut process) = os.process_by_info(self.pi.clone()) {
+                            if let Ok(modules) = process.module_list() {
+                                for mi in modules.into_iter() {
+                                    result.push(Box::new(ModuleFolder::new(
+                                        self.connection.clone(),
+                                        self.pi.clone(),
+                                        mi,
+                                    ))
+                                        as Box<dyn FileSystemEntry>);
+                                }
                             }
                         }
                     }
@@ -247,20 +263,21 @@ impl FileSystemEntry for ModuleRootFolder {
 }
 
 pub struct ModuleFolder {
-    kernel: Arc<Mutex<KernelHandle>>,
-    pi: Win32ProcessInfo,
-    mi: Win32ModuleInfo,
+    connection: Arc<Mutex<Connection>>,
+    pi: ProcessInfo,
+    mi: ModuleInfo,
 
     name: String,
     children: FileSystemChildren,
 }
+unsafe impl Sync for ModuleFolder {} // TODO: does this hold?
 
 // TODO: unify Win32ModuleInfo for different targets
 impl ModuleFolder {
-    fn new(kernel: Arc<Mutex<KernelHandle>>, pi: Win32ProcessInfo, mi: Win32ModuleInfo) -> Self {
+    fn new(connection: Arc<Mutex<Connection>>, pi: ProcessInfo, mi: ModuleInfo) -> Self {
         let name = format!("{:x}_{}", mi.base, mi.name);
         Self {
-            kernel,
+            connection,
             pi,
             mi,
 
@@ -283,12 +300,12 @@ impl FileSystemEntry for ModuleFolder {
         Some(self.children.get_or_insert(|| {
             vec![
                 Box::new(ModulePeFolder::new(
-                    self.kernel.clone(),
+                    self.connection.clone(),
                     self.pi.clone(),
                     self.mi.clone(),
                 )),
                 Box::new(ModuleDumpFile::new(
-                    self.kernel.clone(),
+                    self.connection.clone(),
                     self.pi.clone(),
                     self.mi.clone(),
                 )),

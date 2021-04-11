@@ -6,7 +6,7 @@ use log::{info, Level};
 extern crate clap;
 use clap::{App, Arg};
 
-use memflow::*;
+use memflow::prelude::v1::*;
 use memflow_win32::*;
 
 fn main() {

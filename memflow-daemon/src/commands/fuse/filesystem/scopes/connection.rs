@@ -1,28 +1,37 @@
 use super::super::{FileSystemEntry, FileSystemFileHandler};
 use crate::error::{Error, Result};
-use crate::state::KernelHandle;
+use crate::state::Connection;
 
 use std::sync::{Arc, Mutex};
 
-use memflow::*;
+use memflow::prelude::v1::*;
 
 // TODO: block storage?
 pub struct PhysicalDumpFile {
-    kernel: Arc<Mutex<KernelHandle>>,
-    phys_size: usize,
+    connection: Arc<Mutex<Connection>>,
+    metadata: PhysicalMemoryMetadata,
 }
 
 impl PhysicalDumpFile {
-    pub fn new(kernel: Arc<Mutex<KernelHandle>>) -> Self {
-        let phys_size = if let Ok(kernel) = kernel.lock() {
-            match &*kernel {
-                KernelHandle::Win32(kernel) => kernel.phys_mem.metadata().size,
+    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
+        let metadata = if let Ok(connection) = connection.lock() {
+            match &*connection {
+                Connection::Connector(connector) => connector.metadata(),
+                Connection::Os(os) => {
+                    panic!("os.into_phys_mem() not implemented yet");
+                }
             }
         } else {
-            0
+            PhysicalMemoryMetadata {
+                size: 0,
+                readonly: false,
+            }
         };
 
-        Self { kernel, phys_size }
+        Self {
+            connection,
+            metadata,
+        }
     }
 }
 
@@ -37,54 +46,63 @@ impl FileSystemEntry for PhysicalDumpFile {
 
     // TODO: type regularfile,etc
     fn size(&self) -> usize {
-        self.phys_size
+        self.metadata.size
     }
 
     fn is_writable(&self) -> bool {
-        true
+        !self.metadata.readonly
     }
 
     fn open(&self) -> Result<Box<dyn FileSystemFileHandler>> {
-        if let Ok(kernel) = self.kernel.lock() {
-            Ok(Box::new(PhysicalDumpReader::new(kernel.clone())))
+        if let Ok(connection) = self.connection.lock() {
+            Ok(Box::new(PhysicalDumpReader::new(
+                connection.clone(),
+                self.metadata.clone(),
+            )))
         } else {
-            Err(Error::Other("unable to lock kernel".to_string()))
+            Err(Error::Other("unable to lock connection".to_string()))
         }
     }
 }
 
 struct PhysicalDumpReader {
-    kernel: KernelHandle,
+    connection: Connection,
+    metadata: PhysicalMemoryMetadata,
 }
 
 impl PhysicalDumpReader {
-    pub fn new(kernel: KernelHandle) -> Self {
-        Self { kernel }
+    pub fn new(connection: Connection, metadata: PhysicalMemoryMetadata) -> Self {
+        Self {
+            connection,
+            metadata,
+        }
     }
 }
 
 impl FileSystemFileHandler for PhysicalDumpReader {
     fn read(&mut self, offset: u64, size: u32) -> Result<Vec<u8>> {
-        match &mut self.kernel {
-            KernelHandle::Win32(kernel) => {
-                let phys_size = kernel.phys_mem.metadata().size;
-                let real_size = std::cmp::min(size as usize, phys_size - offset as usize);
+        let phys_size = self.metadata.size;
+        let real_size = std::cmp::min(size as usize, phys_size - offset as usize);
 
-                kernel
-                    .phys_mem
-                    .phys_read_raw((offset as u64).into(), real_size)
-                    .map_err(Error::from)
+        match &mut self.connection {
+            Connection::Connector(connector) => connector
+                .phys_read_raw((offset as u64).into(), real_size)
+                .map_err(Error::from),
+            Connection::Os(os) => {
+                panic!("os.into_phys_mem() not implemented yet");
             }
         }
     }
 
     fn write(&mut self, offset: u64, data: Vec<u8>) -> Result<usize> {
-        match &mut self.kernel {
-            KernelHandle::Win32(kernel) => kernel
-                .phys_mem
+        match &mut self.connection {
+            Connection::Connector(connector) => connector
                 .phys_write_raw((offset as u64).into(), &data)
                 .map_err(Error::from)
                 .map(|_| data.len()),
+            Connection::Os(os) => {
+                panic!("os.into_phys_mem() not implemented yet");
+            }
         }
     }
 }
